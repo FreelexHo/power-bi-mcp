@@ -1,0 +1,291 @@
+"""Scheduled refresh report tool."""
+
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
+
+from app import mcp
+from auth import _get_json, _safe_get_json
+
+# ---------------------------------------------------------------------------
+# AEST helpers
+# ---------------------------------------------------------------------------
+_AEST = timezone(timedelta(hours=10))
+
+
+def _utc_iso_to_aest(iso_str: str | None) -> str | None:
+    """Convert UTC ISO-8601 string to 'YYYY-MM-DD HH:MM:SS AEST'."""
+    if not iso_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return dt.astimezone(_AEST).strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return iso_str
+
+
+def _aest_date(iso_str: str | None) -> str | None:
+    """Extract AEST date (YYYY-MM-DD) from a UTC ISO string."""
+    if not iso_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return dt.astimezone(_AEST).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+
+def _calc_duration(start_iso: str | None, end_iso: str | None) -> str | None:
+    """Human-readable duration between two UTC ISO strings."""
+    if not start_iso or not end_iso:
+        return None
+    try:
+        s = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+        e = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+        total = int((e - s).total_seconds())
+        if total < 0:
+            return "N/A"
+        h, rem = divmod(total, 3600)
+        m, sec = divmod(rem, 60)
+        if h:
+            return f"{h}h {m}m {sec}s"
+        if m:
+            return f"{m}m {sec}s"
+        return f"{sec}s"
+    except (ValueError, TypeError):
+        return None
+
+
+@mcp.tool()
+def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str = "json") -> str:
+    """List scheduled refresh status for every dataset with an enabled refresh schedule.
+
+    Scans all datasets in a workspace, identifies those with refresh schedule enabled,
+    and reports every Scheduled refresh that occurred on the target date (AEST).
+    Each refresh is a flat record with dataset, owner, time pair, duration, status,
+    error, and bound reports.
+
+    Note: Scheduled refreshes do NOT support the Enhanced Refresh Details API, so
+    error info comes from serviceExceptionJson only.
+
+    Args:
+        workspace_id: The workspace (group) ID.
+        date: Optional date string (YYYY-MM-DD) in AEST. Defaults to today (AEST).
+        format: Output format - "json" (default) or "table" (Markdown table).
+
+    Returns:
+        JSON report or Markdown table with flat refresh records and workspace-level summary.
+    """
+    target_date = date.strip() if date else datetime.now(_AEST).strftime("%Y-%m-%d")
+
+    # Step 1: list all datasets
+    datasets_raw = _get_json(f"/groups/{workspace_id}/datasets")
+    all_datasets = datasets_raw.get("value", [])
+
+    # Step 2: get refresh schedule for each refreshable dataset & filter enabled
+    refreshable = [ds for ds in all_datasets if ds.get("isRefreshable")]
+
+    def _check_schedule(ds: dict) -> dict | None:
+        ds_id = ds.get("id")
+        schedule = _safe_get_json(f"/groups/{workspace_id}/datasets/{ds_id}/refreshSchedule")
+        if isinstance(schedule, dict) and schedule.get("enabled"):
+            return {
+                "dataset_id": ds_id,
+                "dataset_name": ds.get("name", ""),
+                "configuredBy": ds.get("configuredBy", ""),
+            }
+        return None
+
+    scheduled_datasets: list[dict] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_check_schedule, ds): ds for ds in refreshable}
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result is not None:
+                scheduled_datasets.append(result)
+
+    # Step 3: get all reports in workspace (one call, then map by datasetId)
+    reports_raw = _safe_get_json(f"/groups/{workspace_id}/reports")
+    reports_by_dataset: dict[str, list[dict]] = {}
+    if isinstance(reports_raw, dict) and "value" in reports_raw:
+        for r in reports_raw["value"]:
+            did = r.get("datasetId")
+            if did:
+                reports_by_dataset.setdefault(did, []).append({
+                    "id": r.get("id"),
+                    "name": r.get("name"),
+                    "webUrl": r.get("webUrl"),
+                })
+
+    # Step 4: collect flat refresh records
+    refreshes: list[dict] = []
+    total_completed = 0
+    total_failed = 0
+    total_in_progress = 0
+
+    for ds in scheduled_datasets:
+        ds_id = ds["dataset_id"]
+        bound = reports_by_dataset.get(ds_id, [])
+
+        history_raw = _safe_get_json(f"/groups/{workspace_id}/datasets/{ds_id}/refreshes?$top=10")
+        all_refreshes = history_raw.get("value", []) if isinstance(history_raw, dict) else []
+
+        for r in all_refreshes:
+            if r.get("refreshType") != "Scheduled":
+                continue
+            start_utc = r.get("startTime", "")
+            if not start_utc or _aest_date(start_utc) != target_date:
+                continue
+
+            end_utc = r.get("endTime")
+            status = r.get("status", "")
+
+            # Parse error from serviceExceptionJson
+            error = None
+            error_details = None
+            error_main_details = None
+            svc_exc = r.get("serviceExceptionJson")
+            if svc_exc:
+                try:
+                    exc_obj = json.loads(svc_exc) if isinstance(svc_exc, str) else svc_exc
+                    # Outer layer: errorCode + errorDescription (standard format)
+                    error = exc_obj.get("errorCode") or exc_obj.get("error_code")
+                    error_details = exc_obj.get("errorDescription")
+                    # If errorDescription is itself a JSON string, parse it for nested details
+                    inner_obj = None
+                    if isinstance(error_details, str) and error_details.startswith("{"):
+                        try:
+                            inner_obj = json.loads(error_details)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    # Also handle direct nested format (no outer errorCode wrapper)
+                    if not inner_obj and not error:
+                        inner_obj = exc_obj
+                    # Navigate nested structure: error.pbi.error
+                    if isinstance(inner_obj, dict):
+                        pbi_error = None
+                        err_root = inner_obj.get("error")
+                        if isinstance(err_root, dict):
+                            pbi_error = err_root.get("pbi.error") or err_root
+                        if not error and isinstance(pbi_error, dict):
+                            error = pbi_error.get("code")
+                        if not error and isinstance(err_root, dict):
+                            error = err_root.get("code")
+                        # Extract details list
+                        detail_list = []
+                        if isinstance(pbi_error, dict):
+                            detail_list = pbi_error.get("details") or []
+                        for ed in detail_list:
+                            if ed.get("code") == "DM_ErrorDetailNameCode_UnderlyingErrorMessage":
+                                detail = ed.get("detail") or {}
+                                error_main_details = detail.get("value") if isinstance(detail, dict) else str(detail)
+                                break
+                    if not error:
+                        error = str(exc_obj)
+                except (json.JSONDecodeError, TypeError):
+                    error = str(svc_exc)[:300]
+
+            # Extract warnings from attempt-level serviceExceptionJson
+            warning = None
+            if not svc_exc:
+                for attempt in r.get("refreshAttempts", []):
+                    att_exc = attempt.get("serviceExceptionJson")
+                    if att_exc:
+                        warning = att_exc if isinstance(att_exc, str) else json.dumps(att_exc, ensure_ascii=False)
+                        break
+
+            refreshes.append({
+                "dataset": ds["dataset_name"],
+                "owner": ds["configuredBy"],
+                "start_time": _utc_iso_to_aest(start_utc),
+                "end_time": _utc_iso_to_aest(end_utc),
+                "duration": _calc_duration(start_utc, end_utc),
+                "status": status,
+                "error": error,
+                "error_details": error_details,
+                "error_main_details": error_main_details,
+                "warning": warning,
+                "bound_report_count": len(bound),
+                "bound_reports": bound,
+            })
+
+            if status == "Completed":
+                total_completed += 1
+            elif status == "Failed":
+                total_failed += 1
+            elif status in ("Unknown", "InProgress"):
+                total_in_progress += 1
+
+    out = {
+        "workspace_id": workspace_id,
+        "date": target_date,
+        "timezone": "AEST (UTC+10)",
+        "total_scheduled_datasets": len(scheduled_datasets),
+        "total_refreshes": len(refreshes),
+        "refreshes": refreshes,
+        "summary": {
+            "completed": total_completed,
+            "failed": total_failed,
+            "in_progress": total_in_progress,
+        },
+    }
+
+    if format == "table":
+        return _format_as_table(out)
+    return json.dumps(out, ensure_ascii=False, indent=2)
+
+
+def _format_as_table(report: dict) -> str:
+    """Convert the report dict to a Markdown table string."""
+    lines: list[str] = []
+    lines.append(f"**Workspace:** `{report['workspace_id']}` | **Date:** {report['date']} ({report['timezone']})")
+    summary = report["summary"]
+    lines.append(f"**Scheduled Datasets:** {report['total_scheduled_datasets']} | "
+                 f"\u2705 {summary['completed']} | \u274c {summary['failed']} | \u23f3 {summary['in_progress']}")
+    lines.append("")
+
+    refreshes = report.get("refreshes", [])
+    if not refreshes:
+        lines.append("_No scheduled refreshes found for this date._")
+        return "\n".join(lines)
+
+    # Table header
+    lines.append("| Dataset | Owner | Time (Start → End) | Duration | Status | Error | Warning | Error Main Details | Error Details | Reports |")
+    lines.append("|---------|-------|--------------------|----------|--------|-------|---------|--------------------|--------------|---------| ")
+
+    for r in refreshes:
+        error_cell = (r.get("error") or "").replace("|", "\\|")
+        warning_cell = (r.get("warning") or "").replace("|", "\\|")
+        error_main = (r.get("error_main_details") or "").replace("|", "\\|")
+        error_detail = (r.get("error_details") or "").replace("|", "\\|")
+        # Truncate long cells for table readability
+        if len(warning_cell) > 80:
+            warning_cell = warning_cell[:77] + "..."
+        if len(error_main) > 80:
+            error_main = error_main[:77] + "..."
+        if len(error_detail) > 80:
+            error_detail = error_detail[:77] + "..."
+
+        start = r.get("start_time", "") or ""
+        end = r.get("end_time", "") or ""
+        time_cell = f"{start} → {end}" if start or end else ""
+
+        report_names = ", ".join(rpt.get("name", "") for rpt in r.get("bound_reports", []))
+        if len(report_names) > 60:
+            report_names = report_names[:57] + "..."
+
+        lines.append(
+            f"| {r.get('dataset', '')} "
+            f"| {r.get('owner', '')} "
+            f"| {time_cell} "
+            f"| {r.get('duration', '') or ''} "
+            f"| {r.get('status', '')} "
+            f"| {error_cell} "
+            f"| {warning_cell} "
+            f"| {error_main} "
+            f"| {error_detail} "
+            f"| {report_names} |"
+        )
+
+
+    return "\n".join(lines)

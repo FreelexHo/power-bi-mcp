@@ -1,0 +1,22 @@
+﻿# Python virtual environment
+.venv/
+
+# Byte-compiled / cached
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# Sensitive / user-specific
+config.json
+
+# Backup files
+*.bak
+*.bak2
+
+# IDE agent config
+.agents/
