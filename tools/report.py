@@ -58,12 +58,17 @@ def _calc_duration(start_iso: str | None, end_iso: str | None) -> str | None:
 
 @mcp.tool()
 def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str = "json") -> str:
-    """List scheduled refresh status for every dataset with an enabled refresh schedule.
+    """List scheduled refresh status for every dataset that had scheduled refreshes recently.
 
-    Scans all datasets in a workspace, identifies those with refresh schedule enabled,
-    and reports every Scheduled refresh that occurred on the target date (AEST).
-    Each refresh is a flat record with dataset, owner, time pair, duration, status,
-    error, and bound reports.
+    Scans all refreshable datasets in a workspace, identifies those with any
+    Scheduled refresh in the past 7 days, and reports refresh records for the
+    target date (AEST).  If a qualified dataset has no refresh on the target
+    date, its most recent Scheduled refresh is shown instead (e.g. when Power BI
+    auto-disabled the schedule after repeated failures).
+
+    Each record includes a ``current_status`` snapshot of the dataset's most
+    recent refresh (any type), so the reader can tell whether a past Scheduled
+    failure has since been resolved by an on-demand or API-triggered refresh.
 
     Note: Scheduled refreshes do NOT support the Enhanced Refresh Details API, so
     error info comes from serviceExceptionJson only.
@@ -77,32 +82,16 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
         JSON report or Markdown table with flat refresh records and workspace-level summary.
     """
     target_date = date.strip() if date else datetime.now(_AEST).strftime("%Y-%m-%d")
+    seven_days_ago = (
+        datetime.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)
+    ).strftime("%Y-%m-%d")
 
     # Step 1: list all datasets
     datasets_raw = _get_json(f"/groups/{workspace_id}/datasets")
     all_datasets = datasets_raw.get("value", [])
 
-    # Step 2: get refresh schedule for each refreshable dataset & filter enabled
+    # Step 2: filter refreshable datasets
     refreshable = [ds for ds in all_datasets if ds.get("isRefreshable")]
-
-    def _check_schedule(ds: dict) -> dict | None:
-        ds_id = ds.get("id")
-        schedule = _safe_get_json(f"/groups/{workspace_id}/datasets/{ds_id}/refreshSchedule")
-        if isinstance(schedule, dict) and schedule.get("enabled"):
-            return {
-                "dataset_id": ds_id,
-                "dataset_name": ds.get("name", ""),
-                "configuredBy": ds.get("configuredBy", ""),
-            }
-        return None
-
-    scheduled_datasets: list[dict] = []
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(_check_schedule, ds): ds for ds in refreshable}
-        for fut in as_completed(futures):
-            result = fut.result()
-            if result is not None:
-                scheduled_datasets.append(result)
 
     # Step 3: get all reports in workspace (one call, then map by datasetId)
     reports_raw = _safe_get_json(f"/groups/{workspace_id}/reports")
@@ -117,26 +106,64 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
                     "webUrl": r.get("webUrl"),
                 })
 
-    # Step 4: collect flat refresh records
+    # Step 4: fetch history & collect flat refresh records
     refreshes: list[dict] = []
     total_completed = 0
     total_failed = 0
     total_in_progress = 0
+    qualified_count = 0
 
-    for ds in scheduled_datasets:
-        ds_id = ds["dataset_id"]
+    def _process_dataset(ds: dict) -> list[dict]:
+        """Fetch refresh history and return records for a single dataset."""
+        ds_id = ds.get("id")
+        ds_name = ds.get("name", "")
+        configured_by = ds.get("configuredBy", "")
         bound = reports_by_dataset.get(ds_id, [])
 
-        history_raw = _safe_get_json(f"/groups/{workspace_id}/datasets/{ds_id}/refreshes?$top=10")
-        all_refreshes = history_raw.get("value", []) if isinstance(history_raw, dict) else []
+        history_raw = _safe_get_json(
+            f"/groups/{workspace_id}/datasets/{ds_id}/refreshes?$top=30"
+        )
+        all_refreshes = (
+            history_raw.get("value", []) if isinstance(history_raw, dict) else []
+        )
 
+        # Snapshot: most recent refresh of any type (for cross-referencing)
+        latest_any = all_refreshes[0] if all_refreshes else None
+        current_status = None
+        if latest_any:
+            current_status = {
+                "refreshType": latest_any.get("refreshType"),
+                "status": latest_any.get("status"),
+                "startTime": _utc_iso_to_aest(latest_any.get("startTime")),
+                "endTime": _utc_iso_to_aest(latest_any.get("endTime")),
+            }
+
+        # Keep only Scheduled refreshes with start_time in the last 7 days
+        recent_scheduled = []
         for r in all_refreshes:
             if r.get("refreshType") != "Scheduled":
                 continue
             start_utc = r.get("startTime", "")
-            if not start_utc or _aest_date(start_utc) != target_date:
+            if not start_utc:
                 continue
+            r_date = _aest_date(start_utc)
+            if r_date and r_date >= seven_days_ago:
+                recent_scheduled.append(r)
 
+        if not recent_scheduled:
+            return []  # Not qualified
+
+        # Prefer target-date records; fall back to the most recent record
+        target_records = [
+            r for r in recent_scheduled
+            if _aest_date(r.get("startTime", "")) == target_date
+        ]
+        if not target_records:
+            target_records = [recent_scheduled[0]]  # newest first from API
+
+        results = []
+        for r in target_records:
+            start_utc = r.get("startTime", "")
             end_utc = r.get("endTime")
             status = r.get("status", "")
 
@@ -148,17 +175,16 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
             if svc_exc:
                 try:
                     exc_obj = json.loads(svc_exc) if isinstance(svc_exc, str) else svc_exc
-                    # Outer layer: errorCode + errorDescription (standard format)
+                    # Outer layer: errorCode + errorDescription
                     error = exc_obj.get("errorCode") or exc_obj.get("error_code")
                     error_details = exc_obj.get("errorDescription")
-                    # If errorDescription is itself a JSON string, parse it for nested details
+                    # If errorDescription is itself JSON, parse for nested details
                     inner_obj = None
                     if isinstance(error_details, str) and error_details.startswith("{"):
                         try:
                             inner_obj = json.loads(error_details)
                         except (json.JSONDecodeError, TypeError):
                             pass
-                    # Also handle direct nested format (no outer errorCode wrapper)
                     if not inner_obj and not error:
                         inner_obj = exc_obj
                     # Navigate nested structure: error.pbi.error
@@ -171,14 +197,15 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
                             error = pbi_error.get("code")
                         if not error and isinstance(err_root, dict):
                             error = err_root.get("code")
-                        # Extract details list
                         detail_list = []
                         if isinstance(pbi_error, dict):
                             detail_list = pbi_error.get("details") or []
                         for ed in detail_list:
                             if ed.get("code") == "DM_ErrorDetailNameCode_UnderlyingErrorMessage":
                                 detail = ed.get("detail") or {}
-                                error_main_details = detail.get("value") if isinstance(detail, dict) else str(detail)
+                                error_main_details = (
+                                    detail.get("value") if isinstance(detail, dict) else str(detail)
+                                )
                                 break
                     if not error:
                         error = str(exc_obj)
@@ -191,16 +218,20 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
                 for attempt in r.get("refreshAttempts", []):
                     att_exc = attempt.get("serviceExceptionJson")
                     if att_exc:
-                        warning = att_exc if isinstance(att_exc, str) else json.dumps(att_exc, ensure_ascii=False)
+                        warning = (
+                            att_exc if isinstance(att_exc, str)
+                            else json.dumps(att_exc, ensure_ascii=False)
+                        )
                         break
 
-            refreshes.append({
-                "dataset": ds["dataset_name"],
-                "owner": ds["configuredBy"],
+            results.append({
+                "dataset": ds_name,
+                "owner": configured_by,
                 "start_time": _utc_iso_to_aest(start_utc),
                 "end_time": _utc_iso_to_aest(end_utc),
                 "duration": _calc_duration(start_utc, end_utc),
                 "status": status,
+                "current_status": current_status,
                 "error": error,
                 "error_details": error_details,
                 "error_main_details": error_main_details,
@@ -209,18 +240,28 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
                 "bound_reports": bound,
             })
 
-            if status == "Completed":
-                total_completed += 1
-            elif status == "Failed":
-                total_failed += 1
-            elif status in ("Unknown", "InProgress"):
-                total_in_progress += 1
+        return results
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_process_dataset, ds): ds for ds in refreshable}
+        for fut in as_completed(futures):
+            records = fut.result()
+            if records:
+                qualified_count += 1
+                for rec in records:
+                    refreshes.append(rec)
+                    if rec["status"] == "Completed":
+                        total_completed += 1
+                    elif rec["status"] == "Failed":
+                        total_failed += 1
+                    elif rec["status"] in ("Unknown", "InProgress"):
+                        total_in_progress += 1
 
     out = {
         "workspace_id": workspace_id,
         "date": target_date,
         "timezone": "AEST (UTC+10)",
-        "total_scheduled_datasets": len(scheduled_datasets),
+        "total_scheduled_datasets": qualified_count,
         "total_refreshes": len(refreshes),
         "refreshes": refreshes,
         "summary": {
@@ -250,8 +291,8 @@ def _format_as_table(report: dict) -> str:
         return "\n".join(lines)
 
     # Table header
-    lines.append("| Dataset | Owner | Time (Start → End) | Duration | Status | Error | Warning | Error Main Details | Error Details | Reports |")
-    lines.append("|---------|-------|--------------------|----------|--------|-------|---------|--------------------|--------------|---------| ")
+    lines.append("| Dataset | Owner | Time (Start →End) | Duration | Status | Current Status | Error | Warning | Error Main Details | Error Details | Reports |")
+    lines.append("|---------|-------|--------------------|----------|--------|----------------|-------|---------|--------------------|--------------|---------| ")
 
     for r in refreshes:
         error_cell = (r.get("error") or "").replace("|", "\\|")
@@ -268,7 +309,17 @@ def _format_as_table(report: dict) -> str:
 
         start = r.get("start_time", "") or ""
         end = r.get("end_time", "") or ""
-        time_cell = f"{start} → {end}" if start or end else ""
+        time_cell = f"{start} →{end}" if start or end else ""
+
+        # Format current_status as compact string
+        cs = r.get("current_status")
+        if cs:
+            cs_type = cs.get("refreshType", "")
+            cs_status = cs.get("status", "")
+            cs_time = cs.get("endTime") or cs.get("startTime") or ""
+            current_cell = f"{cs_type} {cs_status} @ {cs_time}" if cs_time else f"{cs_type} {cs_status}"
+        else:
+            current_cell = ""
 
         report_names = ", ".join(rpt.get("name", "") for rpt in r.get("bound_reports", []))
         if len(report_names) > 60:
@@ -280,6 +331,7 @@ def _format_as_table(report: dict) -> str:
             f"| {time_cell} "
             f"| {r.get('duration', '') or ''} "
             f"| {r.get('status', '')} "
+            f"| {current_cell} "
             f"| {error_cell} "
             f"| {warning_cell} "
             f"| {error_main} "
