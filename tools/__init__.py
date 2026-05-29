@@ -10,3 +10,4 @@ from tools import dataset  # noqa: F401
 from tools import diagnose  # noqa: F401
 from tools import report  # noqa: F401
 from tools import query  # noqa: F401
+from tools import local_model  # noqa: F401

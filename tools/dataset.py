@@ -5,7 +5,7 @@ from typing import Any
 
 from app import mcp
 from auth import _safe_get_json
-from diagnostics import _find_pbip_dataset
+from core.pbip_locator import _find_pbip_dataset
 
 
 def _get_dataset_info(workspace_id: str, dataset_id: str) -> dict[str, Any]:

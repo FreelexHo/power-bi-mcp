@@ -9,7 +9,7 @@ import time
 from app import mcp
 from auth import auth, _get_json, _safe_get_json
 from config import POWER_BI_API, REFRESH_POLL_INTERVAL, REFRESH_POLL_TIMEOUT
-from diagnostics import _classify_refresh
+from core.refresh_classifier import _classify_refresh
 
 logger = logging.getLogger(__name__)
 
