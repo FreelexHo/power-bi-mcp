@@ -4,8 +4,8 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-from app import mcp  # noqa: E402
 import tools  # noqa: E402, F401  — importing registers all @mcp.tool() decorators
+from app import mcp  # noqa: E402
 
 
 def main():

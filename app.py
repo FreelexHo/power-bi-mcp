@@ -1,4 +1,4 @@
-﻿"""FastMCP application instance."""
+"""FastMCP application instance."""
 
 from mcp.server.fastmcp import FastMCP
 

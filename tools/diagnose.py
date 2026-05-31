@@ -4,11 +4,9 @@ import json
 from typing import Any
 
 from app import mcp
-from auth import auth, _get_json, _safe_get_json
-from config import POWER_BI_API
 from diagnostics import _classify_refresh, _find_pbip_dataset, _read_table_tmdl
 from tools.dataset import _get_dataset_info
-from tools.refresh import _refresh_status, _refresh_details
+from tools.refresh import _refresh_details, _refresh_status
 
 
 @mcp.tool()
@@ -34,12 +32,13 @@ def pbi_diagnose(workspace_id: str, dataset_id: str, refresh_id: str = "") -> st
 
     # Step 1: dataset context (direct dict, no JSON round-trip)
     info = _get_dataset_info(workspace_id, dataset_id)
+    ds = info.get("dataset") if isinstance(info.get("dataset"), dict) else {}
     out["dataset_summary"] = {
         "id": dataset_id,
-        "name": (info.get("dataset") or {}).get("name") if isinstance(info.get("dataset"), dict) else None,
-        "configuredBy": (info.get("dataset") or {}).get("configuredBy") if isinstance(info.get("dataset"), dict) else None,
-        "isOnPremGatewayRequired": (info.get("dataset") or {}).get("isOnPremGatewayRequired") if isinstance(info.get("dataset"), dict) else None,
-        "targetStorageMode": (info.get("dataset") or {}).get("targetStorageMode") if isinstance(info.get("dataset"), dict) else None,
+        "name": (ds or {}).get("name"),
+        "configuredBy": (ds or {}).get("configuredBy"),
+        "isOnPremGatewayRequired": (ds or {}).get("isOnPremGatewayRequired"),
+        "targetStorageMode": (ds or {}).get("targetStorageMode"),
     }
     out["datasources"] = info.get("datasources", [])
     out["gateways"] = info.get("gateways", [])

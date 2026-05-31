@@ -4,10 +4,8 @@ import json
 import logging
 import time
 
-
-
 from app import mcp
-from auth import auth, _get_json, _safe_get_json
+from auth import _get_json, _safe_get_json, auth
 from config import POWER_BI_API, REFRESH_POLL_INTERVAL, REFRESH_POLL_TIMEOUT
 from diagnostics import _classify_refresh
 
@@ -59,18 +57,21 @@ def pbi_refresh_dataset(
     if tables:
         payload["objects"] = [{"table": t} for t in tables]
     resp = auth.request(
-        'post',
+        "post",
         f"{POWER_BI_API}/groups/{workspace_id}/datasets/{dataset_id}/refreshes",
         content=json.dumps(payload),
         timeout=30,
     )
 
     if resp.status_code != 202:
-        return json.dumps({
-            "status": "failed_to_trigger",
-            "status_code": resp.status_code,
-            "body": resp.text[:1000],
-        }, ensure_ascii=False)
+        return json.dumps(
+            {
+                "status": "failed_to_trigger",
+                "status_code": resp.status_code,
+                "body": resp.text[:1000],
+            },
+            ensure_ascii=False,
+        )
 
     location = resp.headers.get("Location", "")
     request_id = location.rsplit("/", 1)[-1] if location else None
@@ -104,9 +105,7 @@ def pbi_refresh_dataset(
         check_count += 1
         elapsed = int(time.time() - start)
         try:
-            details = _safe_get_json(
-                f"/groups/{workspace_id}/datasets/{dataset_id}/refreshes/{request_id}"
-            )
+            details = _safe_get_json(f"/groups/{workspace_id}/datasets/{dataset_id}/refreshes/{request_id}")
             status = details.get("status", "Unknown") if isinstance(details, dict) else "Unknown"
             logger.info("Poll #%d (%ds): status=%s", check_count, elapsed, status)
             if status and status not in ("Unknown", "InProgress"):
@@ -127,6 +126,7 @@ def pbi_refresh_dataset(
 # Internal helpers used by both pbi_refresh_manage and pbi_diagnose
 # ---------------------------------------------------------------------------
 
+
 def _refresh_status(workspace_id: str, dataset_id: str, top: int = 5) -> list[dict]:
     """Get refresh history as a list of dicts (internal, no JSON serialization).
 
@@ -141,7 +141,7 @@ def _refresh_status(workspace_id: str, dataset_id: str, top: int = 5) -> list[di
 def _refresh_details(workspace_id: str, dataset_id: str, refresh_id: str) -> dict:
     """Get full execution details for a specific refresh (internal, no JSON serialization)."""
     resp = auth.request(
-        'get',
+        "get",
         f"{POWER_BI_API}/groups/{workspace_id}/datasets/{dataset_id}/refreshes/{refresh_id}",
         timeout=30,
     )
@@ -158,7 +158,7 @@ def _refresh_details(workspace_id: str, dataset_id: str, refresh_id: str) -> dic
 def _cancel_refresh(workspace_id: str, dataset_id: str, refresh_id: str) -> dict:
     """Cancel an in-progress Enhanced refresh (internal, no JSON serialization)."""
     resp = auth.request(
-        'delete',
+        "delete",
         f"{POWER_BI_API}/groups/{workspace_id}/datasets/{dataset_id}/refreshes/{refresh_id}",
         timeout=30,
     )
@@ -211,4 +211,7 @@ def pbi_refresh_manage(
             return json.dumps({"error": "refresh_id is required for 'cancel' action"}, ensure_ascii=False)
         return json.dumps(_cancel_refresh(workspace_id, dataset_id, refresh_id), ensure_ascii=False)
 
-    return json.dumps({"error": f"Unknown action '{action}'. Use 'status', 'details', or 'cancel'."}, ensure_ascii=False)
+    return json.dumps(
+        {"error": f"Unknown action '{action}'. Use 'status', 'details', or 'cancel'."},
+        ensure_ascii=False,
+    )

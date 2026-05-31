@@ -1,9 +1,7 @@
-﻿"""DAX query execution tool."""
+"""DAX query execution tool."""
 
 import json
 import logging
-
-
 
 from app import mcp
 from auth import auth
@@ -49,7 +47,7 @@ def pbi_execute_query(
         body["impersonatedUserName"] = impersonated_user
 
     resp = auth.request(
-        'post',
+        "post",
         f"{POWER_BI_API}/groups/{workspace_id}/datasets/{dataset_id}/executeQueries",
         content=json.dumps(body),
         timeout=60,

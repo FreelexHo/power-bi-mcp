@@ -16,12 +16,13 @@ def _classify_refresh(refresh: dict | None) -> dict | None:
     messages = refresh.get("messages") or []
     objects = refresh.get("objects") or []
 
-    failed_user_tables = sorted({
-        o.get("table") for o in objects
-        if o.get("status") == "Failed"
-        and o.get("table")
-        and not o["table"].startswith(SYSTEM_TABLE_PREFIXES)
-    })
+    failed_user_tables = sorted(
+        {
+            o.get("table")
+            for o in objects
+            if o.get("status") == "Failed" and o.get("table") and not o["table"].startswith(SYSTEM_TABLE_PREFIXES)
+        }
+    )
 
     # Find root cause: earliest Error message with SourceObject.Table populated
     root_msg = None
@@ -74,7 +75,9 @@ def _classify_refresh(refresh: dict | None) -> dict | None:
                 f'Table[""], Field="", PromoteHeaders missing source columns.'
             )
         elif underlying["pattern"] == "CredentialsNotConfigured":
-            actions.append("Reset datasource credentials in Power BI Service > Dataset Settings > Data source credentials.")
+            actions.append(
+                "Reset datasource credentials in Power BI Service > Dataset Settings > Data source credentials."
+            )
         elif underlying["pattern"] == "GatewayDown":
             actions.append("Check gateway status (Discover Gateways) and contact gatewayContactInformation.")
         elif underlying["pattern"] == "MemoryEviction":
@@ -160,15 +163,17 @@ def _find_pbip_dataset(dataset_name: str) -> dict:
         expressions_file = definition / "expressions.tmdl" if definition else None
         model_file = definition / "model.tmdl" if definition else None
 
-        matches.append({
-            "match_type": c["match"],
-            "folder": str(folder),
-            "semantic_model_dir": str(sm_dir) if sm_dir else None,
-            "definition_dir": str(definition) if definition and definition.exists() else None,
-            "tables_dir": str(tables_dir) if tables_dir and tables_dir.exists() else None,
-            "expressions_tmdl": str(expressions_file) if expressions_file and expressions_file.exists() else None,
-            "model_tmdl": str(model_file) if model_file and model_file.exists() else None,
-        })
+        matches.append(
+            {
+                "match_type": c["match"],
+                "folder": str(folder),
+                "semantic_model_dir": str(sm_dir) if sm_dir else None,
+                "definition_dir": str(definition) if definition and definition.exists() else None,
+                "tables_dir": str(tables_dir) if tables_dir and tables_dir.exists() else None,
+                "expressions_tmdl": str(expressions_file) if expressions_file and expressions_file.exists() else None,
+                "model_tmdl": str(model_file) if model_file and model_file.exists() else None,
+            }
+        )
 
     return {"status": "found", "matches": matches}
 
