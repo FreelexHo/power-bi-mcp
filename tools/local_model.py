@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from app import mcp
-from core.pbip_locator import _find_pbip_dataset
+from diagnostics import _find_pbip_dataset
 from core.tmdl_parser import (
     parse_table_file, parse_relationships_file,
     parse_expressions_file, parse_model_overview, extract_measures

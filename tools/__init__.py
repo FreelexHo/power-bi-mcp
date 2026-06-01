@@ -11,4 +11,5 @@ from tools import (
     refresh,  # noqa: F401
     report,  # noqa: F401
     workspace,  # noqa: F401
+    local_model,  # noqa: F401
 )
