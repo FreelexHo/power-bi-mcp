@@ -51,11 +51,15 @@ def pbi_local_model(
     match = matches[0]
     definition_dir = match.get("definition_dir")
     if not definition_dir:
-        return json.dumps({
-            "error": "definition_dir_not_found",
-            "hint": "SemanticModel/definition/ directory not found in PBIP folder.",
-            "folder": match.get("folder"),
-        }, ensure_ascii=False, indent=2)
+        return json.dumps(
+            {
+                "error": "definition_dir_not_found",
+                "hint": "SemanticModel/definition/ directory not found in PBIP folder.",
+                "folder": match.get("folder"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
     defn = Path(definition_dir)
     tables_dir = defn / "tables"
@@ -80,10 +84,14 @@ def pbi_local_model(
         target = _find_tmdl_file(tables_dir, name)
         if not target:
             available = [f.stem for f in sorted(tables_dir.glob("*.tmdl"))]
-            return json.dumps({
-                "error": f"Table '{name}' not found",
-                "available_tables": available,
-            }, ensure_ascii=False, indent=2)
+            return json.dumps(
+                {
+                    "error": f"Table '{name}' not found",
+                    "available_tables": available,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
 
         parsed = parse_table_file(target)
         # Compact partition: only include source_expression, not full partition metadata
@@ -117,10 +125,14 @@ def pbi_local_model(
         if candidates:
             if len(candidates) == 1:
                 return json.dumps(candidates[0], ensure_ascii=False, indent=2)
-            return json.dumps({
-                "multiple_matches": [{"name": c["name"], "table": c.get("table")} for c in candidates],
-                "hint": "Multiple measures match. Specify exact name.",
-            }, ensure_ascii=False, indent=2)
+            return json.dumps(
+                {
+                    "multiple_matches": [{"name": c["name"], "table": c.get("table")} for c in candidates],
+                    "hint": "Multiple measures match. Specify exact name.",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
 
         return json.dumps({"error": f"Measure '{name}' not found in any table"}, ensure_ascii=False)
 
@@ -140,10 +152,13 @@ def pbi_local_model(
         result = parse_relationships_file(rels_file)
         return json.dumps(result, ensure_ascii=False, indent=2)
 
-    return json.dumps({
-        "error": f"Unknown action '{action}'",
-        "valid_actions": ["overview", "table", "measure", "expressions", "relationships"],
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "error": f"Unknown action '{action}'",
+            "valid_actions": ["overview", "table", "measure", "expressions", "relationships"],
+        },
+        ensure_ascii=False,
+    )
 
 
 def _find_tmdl_file(tables_dir: Path, name: str) -> Path | None:

@@ -18,6 +18,7 @@ _SKIP_KEYS = {"lineageTag"}
 # Low-level helpers
 # ──────────────────────────────────────────────
 
+
 def _indent_level(line: str) -> int:
     """Count leading tabs (TMDL uses tab indentation)."""
     n = 0
@@ -40,6 +41,7 @@ def _strip_quotes(name: str) -> str:
 # ──────────────────────────────────────────────
 # Table file parser
 # ──────────────────────────────────────────────
+
 
 def parse_table_file(tmdl_path: Path) -> dict:
     """Parse a single table .tmdl file into a structured dict.
@@ -288,10 +290,7 @@ def _parse_partition(lines: list[str], start: int) -> dict:
             # Strip 4 leading tabs for clean M code
             raw = line.rstrip()
             tabs_to_strip = 4
-            has_prefix = (
-                len(raw) >= tabs_to_strip
-                and raw[:tabs_to_strip] == "\t" * tabs_to_strip
-            )
+            has_prefix = len(raw) >= tabs_to_strip and raw[:tabs_to_strip] == "\t" * tabs_to_strip
             clean = raw[tabs_to_strip:] if has_prefix else raw.lstrip("\t")
             source_lines.append(clean)
             i += 1
@@ -320,6 +319,7 @@ def _parse_annotation_line(stripped: str) -> dict | None:
 # Measure extraction (convenience wrapper)
 # ──────────────────────────────────────────────
 
+
 def extract_measures(tmdl_path: Path) -> list[dict]:
     """Extract all measures from a table .tmdl file.
 
@@ -337,6 +337,7 @@ def extract_measures(tmdl_path: Path) -> list[dict]:
 # ──────────────────────────────────────────────
 # Relationships file parser
 # ──────────────────────────────────────────────
+
 
 def parse_relationships_file(tmdl_path: Path) -> list[dict]:
     """Parse relationships.tmdl into a list of relationship dicts.
@@ -403,6 +404,7 @@ def parse_relationships_file(tmdl_path: Path) -> list[dict]:
 # ──────────────────────────────────────────────
 # Expressions file parser
 # ──────────────────────────────────────────────
+
 
 def parse_expressions_file(tmdl_path: Path) -> list[dict]:
     """Parse expressions.tmdl into a list of shared M expression dicts.
@@ -495,6 +497,7 @@ def parse_expressions_file(tmdl_path: Path) -> list[dict]:
 # Model overview (aggregate)
 # ──────────────────────────────────────────────
 
+
 def parse_model_overview(definition_dir: Path) -> dict:
     """Aggregate all TMDL files under a definition/ directory into a compact overview.
 
@@ -532,17 +535,21 @@ def parse_model_overview(definition_dir: Path) -> dict:
                 mode = None
                 if parsed["partitions"]:
                     mode = parsed["partitions"][0].get("mode")
-                tables_summary.append({
-                    "name": parsed["name"],
-                    "columns": n_cols,
-                    "measures": n_meas,
-                    "mode": mode,
-                })
+                tables_summary.append(
+                    {
+                        "name": parsed["name"],
+                        "columns": n_cols,
+                        "measures": n_meas,
+                        "mode": mode,
+                    }
+                )
             except Exception as e:
-                tables_summary.append({
-                    "name": tmdl.stem,
-                    "error": str(e),
-                })
+                tables_summary.append(
+                    {
+                        "name": tmdl.stem,
+                        "error": str(e),
+                    }
+                )
 
     rel_count = 0
     if rels_file.exists():

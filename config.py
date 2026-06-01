@@ -20,7 +20,6 @@ REFRESH_POLL_INTERVAL = 30  # 30s between status checks (Enhanced refresh fails 
 REFRESH_POLL_TIMEOUT = 1800  # 30 min default cap
 
 
-
 @functools.cache
 def _load_config() -> dict:
     """Load config.json once and cache at module level."""

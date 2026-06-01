@@ -262,6 +262,7 @@ def _calc_duration(start_iso: str | None, end_iso: str | None) -> str | None:
     except (ValueError, TypeError):
         return None
 
+
 # ---------------------------------------------------------------------------
 # Table formatting helpers for pbi_refresh_manage
 # ---------------------------------------------------------------------------
@@ -277,10 +278,7 @@ def _format_status_table(records: list[dict]) -> str:
         f"| # | Request ID | Type | Start ({DISPLAY_TZ_SHORT}) | End ({DISPLAY_TZ_SHORT})"
         " | Duration | Status | Initiated By |"
     )
-    lines.append(
-        "|---|-----------|------|--------------|----------"
-        "|----------|--------|--------------|"
-    )
+    lines.append("|---|-----------|------|--------------|----------|----------|--------|--------------|")
 
     for i, r in enumerate(records, 1):
         req_id = r.get("requestId", "") or ""
@@ -303,9 +301,7 @@ def _format_status_table(records: list[dict]) -> str:
 
         short_id = req_id[:12] + ("..." if len(req_id) > 12 else "")
         lines.append(
-            f"| {i} | {short_id} "
-            f"| {rtype} | {start_local} | {end_local} "
-            f"| {duration} | {status} | {initiated} |"
+            f"| {i} | {short_id} | {rtype} | {start_local} | {end_local} | {duration} | {status} | {initiated} |"
         )
 
     return "\n".join(lines)
@@ -314,9 +310,9 @@ def _format_status_table(records: list[dict]) -> str:
 def _format_details_table(detail: dict) -> str:
     """Format a single refresh detail as a Markdown table with local times."""
     if "error" in detail and detail.get("error") == "request_failed":
-        sc = detail.get('status_code', '')
-        hint = detail.get('hint', '')
-        body = detail.get('body', '')
+        sc = detail.get("status_code", "")
+        hint = detail.get("hint", "")
+        body = detail.get("body", "")
         return f"**Error:** request_failed (HTTP {sc})\n{hint}\n{body}"
 
     lines: list[str] = []
@@ -340,9 +336,7 @@ def _format_details_table(detail: dict) -> str:
     if objects:
         lines.append("### Objects")
         lines.append(
-            f"| Table | Partition | Status"
-            f" | Start ({DISPLAY_TZ_SHORT})"
-            f" | End ({DISPLAY_TZ_SHORT}) | Duration |"
+            f"| Table | Partition | Status | Start ({DISPLAY_TZ_SHORT}) | End ({DISPLAY_TZ_SHORT}) | Duration |"
         )
         lines.append("|-------|-----------|--------|--------------|------------|----------|")
         for obj in objects:
@@ -363,7 +357,7 @@ def _format_details_table(detail: dict) -> str:
         lines.append("|------|---------|")
         for msg in messages:
             msg_type = msg.get("type", "")
-            msg_text = (msg.get('message', '') or '').replace('|', '\\|')
+            msg_text = (msg.get("message", "") or "").replace("|", "\\|")
             if len(msg_text) > 120:
                 msg_text = msg_text[:117] + "..."
             lines.append(f"| {msg_type} | {msg_text} |")
