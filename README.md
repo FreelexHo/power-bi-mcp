@@ -24,14 +24,8 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 | Tool | Description |
 |---|---|
-| `pbi_diagnose` | One-shot diagnostic report for refresh failures — root cause classification, error catalog, next actions, structured TMDL parsing, PBIP source hints |
+| `pbi_diagnose` | One-shot diagnostic report for refresh failures — root cause classification, error catalog, next actions, PBIP source hints |
 | `pbi_locate_pbip` | Locate PBIP source code for a dataset (fuzzy folder match + optional table TMDL & M source extraction) |
-
-### Local Model Reading
-
-| Tool | Description |
-|---|---|
-| `pbi_local_model` | Read local PBIP semantic model structure (overview, table detail, measure DAX, M expressions, relationships). No Desktop connection needed — pure TMDL file parsing. |
 
 ### Query & Reporting
 
@@ -43,26 +37,22 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 ## Architecture
 
 ```
-server.py              # Entry point — configures logging, runs MCP via stdio
-app.py                 # FastMCP instance with server instructions
-config.py              # Configuration loader (config.json, defaults, constants)
-auth.py                # Azure AD device code flow, token caching, HTTP helpers
-core/                  # Pure business logic (no MCP dependency)
-  ├── error_catalog.py   #   Error code catalog + regex patterns
-  ├── refresh_classifier.py  # Refresh failure classification
-  ├── pbip_locator.py    #   PBIP dataset folder/table locator
-  └── tmdl_parser.py     #   TMDL structural parser (tables, measures, relationships, M expressions)
-tools/                 # MCP tool modules (auto-registered via __init__.py)
-  ├── auth_tool.py       #   pbi_auth
-  ├── workspace.py       #   pbi_list_workspaces, pbi_list_datasets
-  ├── dataset.py         #   pbi_dataset_info
-  ├── refresh.py         #   pbi_refresh_dataset, pbi_refresh_manage
-  ├── diagnose.py        #   pbi_diagnose, pbi_locate_pbip
-  ├── query.py           #   pbi_execute_query
-  ├── report.py          #   pbi_scheduled_refresh_report
-  └── local_model.py     #   pbi_local_model (local TMDL reading)
-setup.ps1              # Azure AD App Registration automation (PowerShell)
-config.json            # User-specific config (gitignored)
+server.py            # Entry point — configures logging, runs MCP via stdio
+app.py               # FastMCP instance with server instructions
+config.py            # Configuration loader (config.json, defaults, constants)
+auth.py              # Azure AD device code flow, token caching, HTTP helpers
+diagnostics.py       # Refresh error classification, PBIP folder/table locator
+error_catalog.py     # Error code catalog + regex patterns for failure classification
+tools/               # MCP tool modules (auto-registered via __init__.py)
+  ├── auth_tool.py   #   pbi_auth
+  ├── workspace.py   #   pbi_list_workspaces, pbi_list_datasets
+  ├── dataset.py     #   pbi_dataset_info
+  ├── refresh.py     #   pbi_refresh_dataset, pbi_refresh_manage
+  ├── diagnose.py    #   pbi_diagnose, pbi_locate_pbip
+  ├── query.py       #   pbi_execute_query
+  └── report.py      #   pbi_scheduled_refresh_report
+setup.ps1            # Azure AD App Registration automation (PowerShell)
+config.json          # User-specific config (gitignored)
 ```
 
 ## Quick Start
@@ -70,7 +60,7 @@ config.json            # User-specific config (gitignored)
 ### 1. Install dependencies
 
 ```bash
-git clone <repo-url> && cd power-bi-mcp
+git clone https://github.com/FreelexHo/power-bi-mcp.git && cd power-bi-mcp
 uv venv && uv sync
 ```
 
@@ -139,7 +129,7 @@ The server works out of the box with a built-in public `client_id`. Create a `co
 |---|---|---|
 | `client_id` | Built-in public app | Azure AD App Registration client ID |
 | `token_cache_dir` | `~/.powerbi-mcp` | Directory for cached OAuth tokens |
-| `pbip_root` | *(none)* | Local PBIP repo root — enables `pbi_locate_pbip`, `pbi_local_model`, and `pbi_diagnose` source-level hints |
+| `pbip_root` | *(none)* | Local PBIP repo root — enables `pbi_locate_pbip` and `pbi_diagnose` source-level hints |
 
 A `setup.ps1` script is included to automate App Registration creation via Azure CLI. See [Advanced Setup](#advanced-setup) below.
 

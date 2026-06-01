@@ -4,13 +4,9 @@ import json
 from typing import Any
 
 from app import mcp
-from auth import auth, _get_json, _safe_get_json
-from config import POWER_BI_API
-from core.refresh_classifier import _classify_refresh
-from core.pbip_locator import _find_pbip_dataset, _read_table_tmdl
-from core.tmdl_parser import parse_table_file
+from diagnostics import _classify_refresh, _find_pbip_dataset, _read_table_tmdl
 from tools.dataset import _get_dataset_info
-from tools.refresh import _refresh_status, _refresh_details
+from tools.refresh import _refresh_details, _refresh_status
 
 
 @mcp.tool()
@@ -36,12 +32,13 @@ def pbi_diagnose(workspace_id: str, dataset_id: str, refresh_id: str = "") -> st
 
     # Step 1: dataset context (direct dict, no JSON round-trip)
     info = _get_dataset_info(workspace_id, dataset_id)
+    ds = info.get("dataset") if isinstance(info.get("dataset"), dict) else {}
     out["dataset_summary"] = {
         "id": dataset_id,
-        "name": (info.get("dataset") or {}).get("name") if isinstance(info.get("dataset"), dict) else None,
-        "configuredBy": (info.get("dataset") or {}).get("configuredBy") if isinstance(info.get("dataset"), dict) else None,
-        "isOnPremGatewayRequired": (info.get("dataset") or {}).get("isOnPremGatewayRequired") if isinstance(info.get("dataset"), dict) else None,
-        "targetStorageMode": (info.get("dataset") or {}).get("targetStorageMode") if isinstance(info.get("dataset"), dict) else None,
+        "name": (ds or {}).get("name"),
+        "configuredBy": (ds or {}).get("configuredBy"),
+        "isOnPremGatewayRequired": (ds or {}).get("isOnPremGatewayRequired"),
+        "targetStorageMode": (ds or {}).get("targetStorageMode"),
     }
     out["datasources"] = info.get("datasources", [])
     out["gateways"] = info.get("gateways", [])
@@ -75,27 +72,6 @@ def pbi_diagnose(workspace_id: str, dataset_id: str, refresh_id: str = "") -> st
     # Step 4: classify
     out["classification"] = _classify_refresh(target_refresh)
 
-    # Step 4.5: Enhance next_actions with cursor rules grep patterns
-    cls_actions = (out.get("classification") or {}).get("next_actions", [])
-    underlying = (out.get("classification") or {}).get("underlying")
-    root_table = (out.get("classification") or {}).get("root_cause_table")
-    if underlying and root_table:
-        pattern = underlying.get("pattern", "")
-        if pattern == "EmptyColumnReference":
-            cls_actions.append(
-                f"Grep TMDL for empty column refs: Table[\"\"\"], Field=\"\", "
-                f"RenameColumns.*\"\", ExpandTableColumn.*\"\"."
-            )
-        elif pattern == "CredentialsNotConfigured":
-            cls_actions.append(
-                "Check expressions.tmdl for connection strings and datasource configuration."
-            )
-        elif pattern == "Timeout":
-            cls_actions.append(
-                "Check M expression for Table.NestedJoin (potential cross-join), "
-                "missing Table.Buffer on outer join tables, or unbounded queries."
-            )
-
     # Step 5: PBIP table-level hint if root cause table identified
     cls = out.get("classification") or {}
     root_table = cls.get("root_cause_table")
@@ -112,18 +88,6 @@ def pbi_diagnose(workspace_id: str, dataset_id: str, refresh_id: str = "") -> st
                         "file": table_info["file"],
                         "partition_source_m": table_info.get("partition_source_m"),
                     }
-                    # Structured TMDL parsing for deeper diagnostics
-                    try:
-                        from pathlib import Path
-                        parsed = parse_table_file(Path(table_info["file"]))
-                        out["parsed_root_cause"] = {
-                            "table": parsed.get("name"),
-                            "columns": [{"name": c["name"], "dataType": c.get("dataType")} for c in parsed.get("columns", [])],
-                            "measures": [{"name": m["name"]} for m in parsed.get("measures", [])],
-                            "partition_mode": parsed["partitions"][0].get("mode") if parsed.get("partitions") else None,
-                        }
-                    except Exception:
-                        pass  # structured parsing is best-effort
                 else:
                     out["root_cause_source"] = {
                         "table_name": root_table,

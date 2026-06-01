@@ -1,4 +1,4 @@
-﻿# Python virtual environment
+# Python virtual environment
 .venv/
 
 # Byte-compiled / cached
@@ -18,5 +18,17 @@ config.json
 *.bak
 *.bak2
 
-# IDE agent config
+# Token cache (security-critical)
+.powerbi-mcp/
+token.json
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# IDE / editor config
 .agents/
+.vscode/
+.idea/
+*.swp
+*.swo

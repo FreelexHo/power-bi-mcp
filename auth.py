@@ -145,7 +145,6 @@ class PowerBIAuth:
             raise RuntimeError("Not authenticated. Call pbi_auth first.")
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-
     def request(self, method: str, url: str, **kwargs) -> httpx.Response:
         """Execute HTTP request with automatic token refresh on 401/403.
 
@@ -153,12 +152,12 @@ class PowerBIAuth:
         access token and retries exactly once.  All other status codes are
         returned as-is for the caller to handle.
         """
-        timeout = kwargs.pop('timeout', 60)
+        timeout = kwargs.pop("timeout", 60)
         headers = self.get_headers()
         with httpx.Client(timeout=timeout) as client:
             resp = getattr(client, method)(url, headers=headers, **kwargs)
             if resp.status_code in (401, 403) and self._refresh_access_token():
-                logger.info('Got %d - refreshed token, retrying...', resp.status_code)
+                logger.info("Got %d - refreshed token, retrying...", resp.status_code)
                 headers = self.get_headers()
                 resp = getattr(client, method)(url, headers=headers, **kwargs)
         return resp
@@ -172,7 +171,7 @@ auth = PowerBIAuth()
 
 def _get_json(path: str) -> dict:
     """GET an absolute path under POWER_BI_API; returns parsed JSON or raises."""
-    resp = auth.request('get', f"{POWER_BI_API}{path}", timeout=30)
+    resp = auth.request("get", f"{POWER_BI_API}{path}", timeout=30)
     resp.raise_for_status()
     return resp.json()
 

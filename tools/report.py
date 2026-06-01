@@ -82,9 +82,7 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
         JSON report or Markdown table with flat refresh records and workspace-level summary.
     """
     target_date = date.strip() if date else datetime.now(_AEST).strftime("%Y-%m-%d")
-    seven_days_ago = (
-        datetime.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)
-    ).strftime("%Y-%m-%d")
+    seven_days_ago = (datetime.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
 
     # Step 1: list all datasets
     datasets_raw = _get_json(f"/groups/{workspace_id}/datasets")
@@ -100,11 +98,13 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
         for r in reports_raw["value"]:
             did = r.get("datasetId")
             if did:
-                reports_by_dataset.setdefault(did, []).append({
-                    "id": r.get("id"),
-                    "name": r.get("name"),
-                    "webUrl": r.get("webUrl"),
-                })
+                reports_by_dataset.setdefault(did, []).append(
+                    {
+                        "id": r.get("id"),
+                        "name": r.get("name"),
+                        "webUrl": r.get("webUrl"),
+                    }
+                )
 
     # Step 4: fetch history & collect flat refresh records
     refreshes: list[dict] = []
@@ -120,12 +120,8 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
         configured_by = ds.get("configuredBy", "")
         bound = reports_by_dataset.get(ds_id, [])
 
-        history_raw = _safe_get_json(
-            f"/groups/{workspace_id}/datasets/{ds_id}/refreshes?$top=30"
-        )
-        all_refreshes = (
-            history_raw.get("value", []) if isinstance(history_raw, dict) else []
-        )
+        history_raw = _safe_get_json(f"/groups/{workspace_id}/datasets/{ds_id}/refreshes?$top=30")
+        all_refreshes = history_raw.get("value", []) if isinstance(history_raw, dict) else []
 
         # Snapshot: most recent refresh of any type (for cross-referencing)
         latest_any = all_refreshes[0] if all_refreshes else None
@@ -154,10 +150,7 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
             return []  # Not qualified
 
         # Prefer target-date records; fall back to the most recent record
-        target_records = [
-            r for r in recent_scheduled
-            if _aest_date(r.get("startTime", "")) == target_date
-        ]
+        target_records = [r for r in recent_scheduled if _aest_date(r.get("startTime", "")) == target_date]
         if not target_records:
             target_records = [recent_scheduled[0]]  # newest first from API
 
@@ -203,9 +196,7 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
                         for ed in detail_list:
                             if ed.get("code") == "DM_ErrorDetailNameCode_UnderlyingErrorMessage":
                                 detail = ed.get("detail") or {}
-                                error_main_details = (
-                                    detail.get("value") if isinstance(detail, dict) else str(detail)
-                                )
+                                error_main_details = detail.get("value") if isinstance(detail, dict) else str(detail)
                                 break
                     if not error:
                         error = str(exc_obj)
@@ -218,27 +209,26 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
                 for attempt in r.get("refreshAttempts", []):
                     att_exc = attempt.get("serviceExceptionJson")
                     if att_exc:
-                        warning = (
-                            att_exc if isinstance(att_exc, str)
-                            else json.dumps(att_exc, ensure_ascii=False)
-                        )
+                        warning = att_exc if isinstance(att_exc, str) else json.dumps(att_exc, ensure_ascii=False)
                         break
 
-            results.append({
-                "dataset": ds_name,
-                "owner": configured_by,
-                "start_time": _utc_iso_to_aest(start_utc),
-                "end_time": _utc_iso_to_aest(end_utc),
-                "duration": _calc_duration(start_utc, end_utc),
-                "status": status,
-                "current_status": current_status,
-                "error": error,
-                "error_details": error_details,
-                "error_main_details": error_main_details,
-                "warning": warning,
-                "bound_report_count": len(bound),
-                "bound_reports": bound,
-            })
+            results.append(
+                {
+                    "dataset": ds_name,
+                    "owner": configured_by,
+                    "start_time": _utc_iso_to_aest(start_utc),
+                    "end_time": _utc_iso_to_aest(end_utc),
+                    "duration": _calc_duration(start_utc, end_utc),
+                    "status": status,
+                    "current_status": current_status,
+                    "error": error,
+                    "error_details": error_details,
+                    "error_main_details": error_main_details,
+                    "warning": warning,
+                    "bound_report_count": len(bound),
+                    "bound_reports": bound,
+                }
+            )
 
         return results
 
@@ -281,8 +271,10 @@ def _format_as_table(report: dict) -> str:
     lines: list[str] = []
     lines.append(f"**Workspace:** `{report['workspace_id']}` | **Date:** {report['date']} ({report['timezone']})")
     summary = report["summary"]
-    lines.append(f"**Scheduled Datasets:** {report['total_scheduled_datasets']} | "
-                 f"\u2705 {summary['completed']} | \u274c {summary['failed']} | \u23f3 {summary['in_progress']}")
+    lines.append(
+        f"**Scheduled Datasets:** {report['total_scheduled_datasets']} | "
+        f"\u2705 {summary['completed']} | \u274c {summary['failed']} | \u23f3 {summary['in_progress']}"
+    )
     lines.append("")
 
     refreshes = report.get("refreshes", [])
@@ -291,8 +283,16 @@ def _format_as_table(report: dict) -> str:
         return "\n".join(lines)
 
     # Table header
-    lines.append("| Dataset | Owner | Time (Start →End) | Duration | Status | Current Status | Error | Warning | Error Main Details | Error Details | Reports |")
-    lines.append("|---------|-------|--------------------|----------|--------|----------------|-------|---------|--------------------|--------------|---------| ")
+    lines.append(
+        "| Dataset | Owner | Time (Start →End) | Duration"
+        " | Status | Current Status | Error | Warning"
+        " | Error Main Details | Error Details | Reports |"
+    )
+    lines.append(
+        "|---------|-------|--------------------|----------"
+        "|--------|----------------|-------|----------"
+        "|--------------------|--------------|---------|"
+    )
 
     for r in refreshes:
         error_cell = (r.get("error") or "").replace("|", "\\|")
@@ -338,6 +338,5 @@ def _format_as_table(report: dict) -> str:
             f"| {error_detail} "
             f"| {report_names} |"
         )
-
 
     return "\n".join(lines)
