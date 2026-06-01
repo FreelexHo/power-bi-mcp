@@ -4,6 +4,7 @@ import functools
 import json
 import logging
 import os
+from datetime import timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ DEVICE_CODE_POLL_INTERVAL = 5  # seconds
 DEVICE_CODE_POLL_TIMEOUT = 300  # 5 minutes
 REFRESH_POLL_INTERVAL = 30  # 30s between status checks (Enhanced refresh fails fast)
 REFRESH_POLL_TIMEOUT = 1800  # 30 min default cap
+
 
 
 @functools.cache
@@ -51,3 +53,13 @@ def _get_pbip_root() -> Path | None:
         return None
     p = Path(os.path.expanduser(root))
     return p if p.exists() else None
+
+
+# Display timezone for human-readable output (override via config.json)
+# Supports integer UTC offset in hours, e.g. 10 for AEST, 8 for CST, -5 for EST
+_tz_cfg = _load_config()
+_tz_offset = _tz_cfg.get("display_tz_offset", 10)
+_tz_label = _tz_cfg.get("display_tz_label", "AEST")
+DISPLAY_TZ = timezone(timedelta(hours=_tz_offset))
+DISPLAY_TZ_LABEL = f"{_tz_label} (UTC{_tz_offset:+d})"
+DISPLAY_TZ_SHORT = _tz_label

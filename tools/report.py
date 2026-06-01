@@ -2,35 +2,35 @@
 
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from app import mcp
 from auth import _get_json, _safe_get_json
+from config import DISPLAY_TZ, DISPLAY_TZ_LABEL
 
 # ---------------------------------------------------------------------------
-# AEST helpers
+# Timezone helpers
 # ---------------------------------------------------------------------------
-_AEST = timezone(timedelta(hours=10))
 
 
-def _utc_iso_to_aest(iso_str: str | None) -> str | None:
-    """Convert UTC ISO-8601 string to 'YYYY-MM-DD HH:MM:SS AEST'."""
+def _utc_to_local(iso_str: str | None) -> str | None:
+    """Convert UTC ISO-8601 string to local display timezone."""
     if not iso_str:
         return None
     try:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        return dt.astimezone(_AEST).strftime("%Y-%m-%d %H:%M:%S")
+        return dt.astimezone(DISPLAY_TZ).strftime("%Y-%m-%d %H:%M:%S")
     except (ValueError, TypeError):
         return iso_str
 
 
-def _aest_date(iso_str: str | None) -> str | None:
-    """Extract AEST date (YYYY-MM-DD) from a UTC ISO string."""
+def _local_date(iso_str: str | None) -> str | None:
+    """Extract local date (YYYY-MM-DD) from a UTC ISO string."""
     if not iso_str:
         return None
     try:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        return dt.astimezone(_AEST).strftime("%Y-%m-%d")
+        return dt.astimezone(DISPLAY_TZ).strftime("%Y-%m-%d")
     except (ValueError, TypeError):
         return None
 
@@ -62,7 +62,7 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
 
     Scans all refreshable datasets in a workspace, identifies those with any
     Scheduled refresh in the past 7 days, and reports refresh records for the
-    target date (AEST).  If a qualified dataset has no refresh on the target
+    target date (local display timezone).  If a qualified dataset has no refresh on the target
     date, its most recent Scheduled refresh is shown instead (e.g. when Power BI
     auto-disabled the schedule after repeated failures).
 
@@ -75,13 +75,13 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
 
     Args:
         workspace_id: The workspace (group) ID.
-        date: Optional date string (YYYY-MM-DD) in AEST. Defaults to today (AEST).
+        date: Optional date string (YYYY-MM-DD) in display timezone. Defaults to today.
         format: Output format - "json" (default) or "table" (Markdown table).
 
     Returns:
         JSON report or Markdown table with flat refresh records and workspace-level summary.
     """
-    target_date = date.strip() if date else datetime.now(_AEST).strftime("%Y-%m-%d")
+    target_date = date.strip() if date else datetime.now(DISPLAY_TZ).strftime("%Y-%m-%d")
     seven_days_ago = (datetime.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
 
     # Step 1: list all datasets
@@ -130,8 +130,8 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
             current_status = {
                 "refreshType": latest_any.get("refreshType"),
                 "status": latest_any.get("status"),
-                "startTime": _utc_iso_to_aest(latest_any.get("startTime")),
-                "endTime": _utc_iso_to_aest(latest_any.get("endTime")),
+                "startTime": _utc_to_local(latest_any.get("startTime")),
+                "endTime": _utc_to_local(latest_any.get("endTime")),
             }
 
         # Keep only Scheduled refreshes with start_time in the last 7 days
@@ -142,7 +142,7 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
             start_utc = r.get("startTime", "")
             if not start_utc:
                 continue
-            r_date = _aest_date(start_utc)
+            r_date = _local_date(start_utc)
             if r_date and r_date >= seven_days_ago:
                 recent_scheduled.append(r)
 
@@ -150,7 +150,7 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
             return []  # Not qualified
 
         # Prefer target-date records; fall back to the most recent record
-        target_records = [r for r in recent_scheduled if _aest_date(r.get("startTime", "")) == target_date]
+        target_records = [r for r in recent_scheduled if _local_date(r.get("startTime", "")) == target_date]
         if not target_records:
             target_records = [recent_scheduled[0]]  # newest first from API
 
@@ -216,8 +216,8 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
                 {
                     "dataset": ds_name,
                     "owner": configured_by,
-                    "start_time": _utc_iso_to_aest(start_utc),
-                    "end_time": _utc_iso_to_aest(end_utc),
+                    "start_time": _utc_to_local(start_utc),
+                    "end_time": _utc_to_local(end_utc),
                     "duration": _calc_duration(start_utc, end_utc),
                     "status": status,
                     "current_status": current_status,
@@ -250,7 +250,7 @@ def pbi_scheduled_refresh_report(workspace_id: str, date: str = "", format: str 
     out = {
         "workspace_id": workspace_id,
         "date": target_date,
-        "timezone": "AEST (UTC+10)",
+        "timezone": DISPLAY_TZ_LABEL,
         "total_scheduled_datasets": qualified_count,
         "total_refreshes": len(refreshes),
         "refreshes": refreshes,

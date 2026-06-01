@@ -288,7 +288,11 @@ def _parse_partition(lines: list[str], start: int) -> dict:
             # Strip 4 leading tabs for clean M code
             raw = line.rstrip()
             tabs_to_strip = 4
-            clean = raw[tabs_to_strip:] if len(raw) >= tabs_to_strip and raw[:tabs_to_strip] == "\t" * tabs_to_strip else raw.lstrip("\t")
+            has_prefix = (
+                len(raw) >= tabs_to_strip
+                and raw[:tabs_to_strip] == "\t" * tabs_to_strip
+            )
+            clean = raw[tabs_to_strip:] if has_prefix else raw.lstrip("\t")
             source_lines.append(clean)
             i += 1
             continue

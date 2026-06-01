@@ -3,10 +3,11 @@
 import json
 import logging
 import time
+from datetime import datetime
 
 from app import mcp
 from auth import _get_json, _safe_get_json, auth
-from config import POWER_BI_API, REFRESH_POLL_INTERVAL, REFRESH_POLL_TIMEOUT
+from config import DISPLAY_TZ, DISPLAY_TZ_SHORT, POWER_BI_API, REFRESH_POLL_INTERVAL, REFRESH_POLL_TIMEOUT
 from diagnostics import _classify_refresh
 
 logger = logging.getLogger(__name__)
@@ -176,6 +177,7 @@ def pbi_refresh_manage(
     action: str = "status",
     refresh_id: str = "",
     top: int = 5,
+    format: str = "json",
 ) -> str:
     """Manage refresh lifecycle: view history, get execution details, or cancel.
 
@@ -192,19 +194,26 @@ def pbi_refresh_manage(
         action: Operation to perform - "status", "details", or "cancel".
         refresh_id: Required for "details" and "cancel" actions.
         top: Number of recent refreshes for "status" action (default 5).
+        format: Output format - "json" (default) or "table" (Markdown table with local times).
 
     Returns:
-        JSON with action-specific results.
+        JSON or Markdown table with action-specific results.
     """
     action = action.strip().lower()
 
     if action == "status":
-        return json.dumps(_refresh_status(workspace_id, dataset_id, top), ensure_ascii=False)
+        records = _refresh_status(workspace_id, dataset_id, top)
+        if format == "table":
+            return _format_status_table(records)
+        return json.dumps(records, ensure_ascii=False)
 
     if action == "details":
         if not refresh_id:
             return json.dumps({"error": "refresh_id is required for 'details' action"}, ensure_ascii=False)
-        return json.dumps(_refresh_details(workspace_id, dataset_id, refresh_id), ensure_ascii=False)
+        detail = _refresh_details(workspace_id, dataset_id, refresh_id)
+        if format == "table":
+            return _format_details_table(detail)
+        return json.dumps(detail, ensure_ascii=False)
 
     if action == "cancel":
         if not refresh_id:
@@ -215,3 +224,162 @@ def pbi_refresh_manage(
         {"error": f"Unknown action '{action}'. Use 'status', 'details', or 'cancel'."},
         ensure_ascii=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# Timezone helpers (inlined to avoid cross-module import issues)
+# ---------------------------------------------------------------------------
+
+
+def _utc_to_local(iso_str: str | None) -> str | None:
+    """Convert UTC ISO-8601 string to local display timezone."""
+    if not iso_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return dt.astimezone(DISPLAY_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return iso_str
+
+
+def _calc_duration(start_iso: str | None, end_iso: str | None) -> str | None:
+    """Human-readable duration between two UTC ISO strings."""
+    if not start_iso or not end_iso:
+        return None
+    try:
+        s = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+        e = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+        total = int((e - s).total_seconds())
+        if total < 0:
+            return "N/A"
+        h, rem = divmod(total, 3600)
+        m, sec = divmod(rem, 60)
+        if h:
+            return f"{h}h {m}m {sec}s"
+        if m:
+            return f"{m}m {sec}s"
+        return f"{sec}s"
+    except (ValueError, TypeError):
+        return None
+
+# ---------------------------------------------------------------------------
+# Table formatting helpers for pbi_refresh_manage
+# ---------------------------------------------------------------------------
+
+
+def _format_status_table(records: list[dict]) -> str:
+    """Format refresh history list as a Markdown table with local times."""
+    if not records:
+        return "_No refresh records found._"
+
+    lines: list[str] = []
+    lines.append(
+        f"| # | Request ID | Type | Start ({DISPLAY_TZ_SHORT}) | End ({DISPLAY_TZ_SHORT})"
+        " | Duration | Status | Initiated By |"
+    )
+    lines.append(
+        "|---|-----------|------|--------------|----------"
+        "|----------|--------|--------------|"
+    )
+
+    for i, r in enumerate(records, 1):
+        req_id = r.get("requestId", "") or ""
+        rtype = r.get("refreshType", "") or ""
+        start_utc = r.get("startTime") or ""
+        end_utc = r.get("endTime") or ""
+        start_local = _utc_to_local(start_utc) or ""
+        end_local = _utc_to_local(end_utc) or ""
+        duration = _calc_duration(start_utc, end_utc) or ""
+        status = r.get("status", "") or ""
+        initiated = r.get("extendedStatus", "") or ""
+
+        # Status emoji
+        if status == "Completed":
+            status = f"\u2705 {status}"
+        elif status == "Failed":
+            status = f"\u274c {status}"
+        elif status in ("Unknown", "InProgress"):
+            status = f"\u23f3 {status}"
+
+        short_id = req_id[:12] + ("..." if len(req_id) > 12 else "")
+        lines.append(
+            f"| {i} | {short_id} "
+            f"| {rtype} | {start_local} | {end_local} "
+            f"| {duration} | {status} | {initiated} |"
+        )
+
+    return "\n".join(lines)
+
+
+def _format_details_table(detail: dict) -> str:
+    """Format a single refresh detail as a Markdown table with local times."""
+    if "error" in detail and detail.get("error") == "request_failed":
+        sc = detail.get('status_code', '')
+        hint = detail.get('hint', '')
+        body = detail.get('body', '')
+        return f"**Error:** request_failed (HTTP {sc})\n{hint}\n{body}"
+
+    lines: list[str] = []
+    req_id = detail.get("requestId", "")
+    status = detail.get("status", "")
+    rtype = detail.get("refreshType", "")
+    start_local = _utc_to_local(detail.get("startTime")) or ""
+    end_local = _utc_to_local(detail.get("endTime")) or ""
+    duration = _calc_duration(detail.get("startTime"), detail.get("endTime")) or ""
+
+    lines.append(f"**Refresh:** `{req_id}` | **Type:** {rtype} | **Status:** {status}")
+    lines.append(
+        f"**Start:** {start_local} {DISPLAY_TZ_SHORT}"
+        f" | **End:** {end_local} {DISPLAY_TZ_SHORT}"
+        f" | **Duration:** {duration}"
+    )
+    lines.append("")
+
+    # Objects table (partition-level detail for Enhanced refreshes)
+    objects = detail.get("objects", [])
+    if objects:
+        lines.append("### Objects")
+        lines.append(
+            f"| Table | Partition | Status"
+            f" | Start ({DISPLAY_TZ_SHORT})"
+            f" | End ({DISPLAY_TZ_SHORT}) | Duration |"
+        )
+        lines.append("|-------|-----------|--------|--------------|------------|----------|")
+        for obj in objects:
+            tbl = obj.get("table", "")
+            part = obj.get("partition", "")
+            obj_status = obj.get("status", "")
+            obj_start = _utc_to_local(obj.get("startTime")) or ""
+            obj_end = _utc_to_local(obj.get("endTime")) or ""
+            obj_dur = _calc_duration(obj.get("startTime"), obj.get("endTime")) or ""
+            lines.append(f"| {tbl} | {part} | {obj_status} | {obj_start} | {obj_end} | {obj_dur} |")
+        lines.append("")
+
+    # Messages table
+    messages = detail.get("messages", [])
+    if messages:
+        lines.append("### Messages")
+        lines.append("| Type | Message |")
+        lines.append("|------|---------|")
+        for msg in messages:
+            msg_type = msg.get("type", "")
+            msg_text = (msg.get('message', '') or '').replace('|', '\\|')
+            if len(msg_text) > 120:
+                msg_text = msg_text[:117] + "..."
+            lines.append(f"| {msg_type} | {msg_text} |")
+        lines.append("")
+
+    # Refresh attempts
+    attempts = detail.get("refreshAttempts", [])
+    if attempts:
+        lines.append("### Refresh Attempts")
+        lines.append(f"| # | Attempt ID | Start ({DISPLAY_TZ_SHORT}) | End ({DISPLAY_TZ_SHORT}) | Type |")
+        lines.append("|---|-----------|--------------|------------|------|")
+        for i, att in enumerate(attempts, 1):
+            att_id = att.get("attemptId", "") or ""
+            att_start = _utc_to_local(att.get("startTime")) or ""
+            att_end = _utc_to_local(att.get("endTime")) or ""
+            att_type = att.get("type", "") or ""
+            lines.append(f"| {i} | {att_id} | {att_start} | {att_end} | {att_type} |")
+
+    return "\n".join(lines)
