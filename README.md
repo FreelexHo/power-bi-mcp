@@ -2,6 +2,10 @@
 
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that lets AI agents manage Power BI workspaces, datasets, and refreshes via natural language.
 
+For refresh incidents, the server brings dataset context, execution errors, same-workspace report dependencies, and optional local PBIP source hints into one evidence bundle. An agent can use it to propose the next investigation step while leaving fixes and operational decisions to the operator.
+
+[Walk through a simulated refresh diagnosis](#example-diagnose-a-failed-dataset-refresh), or follow [Quick Start](#quick-start) to connect your MCP client.
+
 ## Features
 
 ### Authentication & Discovery
@@ -24,7 +28,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 | Tool | Description |
 |---|---|
-| `pbi_diagnose` | One-shot diagnostic report for refresh failures — root cause classification, error catalog, next actions, PBIP source hints |
+| `pbi_diagnose` | Collect refresh evidence, classify known errors, suggest next actions, and link matching local PBIP source |
 | `pbi_locate_pbip` | Locate PBIP source code for a dataset (fuzzy folder match + optional table TMDL & M source extraction) |
 
 ### Query & Reporting
@@ -33,6 +37,159 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 |---|---|
 | `pbi_execute_query` | Execute DAX queries against a dataset (supports RLS impersonation) |
 | `pbi_scheduled_refresh_report` | Generate a daily scheduled-refresh status report across all datasets in a workspace (JSON or Markdown table) |
+
+## Example: diagnose a failed dataset refresh
+
+> **Simulated demonstration — not a real Power BI execution.** All names, IDs, paths, service responses, source code, and agent conclusions below are fictional. The example illustrates the current tool contract; it does not demonstrate a production incident, a successful repair, or measured time savings.
+
+A failed refresh can leave several tables marked as failed. This workflow connects execution messages to a candidate table, matching local source, and reports that may still show stale data, giving the operator a concrete place to investigate.
+
+### 1. Ask the agent
+
+> In "Demo Operations", the "Demo Sales" dataset failed to refresh. Find the likely cause, show which reports in this workspace may be affected, and tell me what to inspect before retrying. Do not change settings or start a refresh.
+
+For this example, assume:
+
+- The MCP server is connected and authentication has completed through `pbi_auth`; the signed-in user can read the workspace, dataset, and refresh details.
+- The dataset has a failed Enhanced API refresh with structured `messages` and `objects`.
+- Optional source lookup is enabled through [`pbip_root`](#configuration), with a readable local file at `<pbip_root>/Demo Sales/Demo Sales.SemanticModel/definition/tables/fact_sales.tmdl`.
+
+### 2. Resolve the target, then diagnose
+
+The agent discovers the workspace, then lists its datasets and uses the returned IDs. In this simulated discovery, "Demo Operations" maps to `11111111-1111-1111-1111-111111111111` and "Demo Sales" maps to `22222222-2222-2222-2222-222222222222`.
+
+Illustrative MCP tool names and arguments, called in order after reading each discovery result (these are not JSON-RPC envelopes):
+
+```json
+[
+  {
+    "name": "pbi_list_workspaces",
+    "arguments": {"filter": "Demo Operations"}
+  },
+  {
+    "name": "pbi_list_datasets",
+    "arguments": {"workspace_id": "11111111-1111-1111-1111-111111111111"}
+  },
+  {
+    "name": "pbi_diagnose",
+    "arguments": {
+      "workspace_id": "11111111-1111-1111-1111-111111111111",
+      "dataset_id": "22222222-2222-2222-2222-222222222222",
+      "refresh_id": ""
+    }
+  }
+]
+```
+
+The interface is `pbi_diagnose(workspace_id: str, dataset_id: str, refresh_id: str = "") -> str`. It returns a JSON-encoded string. With an empty `refresh_id`, it reads the latest **10** refresh records and selects the first record in API response order with `status == "Failed"` and `refreshType == "ViaEnhancedApi"`. This may differ from the most recent scheduled or on-demand failure. To investigate a known incident, pass its `requestId` as `refresh_id`.
+
+### 3. Read the evidence
+
+**Simulated output excerpt:** selected fields from the decoded JSON string are shown below; other metadata, history, and nested fields are omitted for readability. Field names and nesting follow the implementation.
+
+```json
+{
+  "dataset_summary": {
+    "id": "22222222-2222-2222-2222-222222222222",
+    "name": "Demo Sales"
+  },
+  "target_refresh_id": "33333333-3333-3333-3333-333333333333",
+  "target_refresh": {
+    "status": "Failed",
+    "messages": [
+      {
+        "type": "Error",
+        "code": "0xC1450012",
+        "message": "Expression.Error: The column '' of the table wasn't found.",
+        "location": {"SourceObject": {"Table": "fact_sales", "Partition": "fact_sales"}}
+      },
+      {
+        "type": "Error",
+        "code": "0xC11C0006",
+        "message": "Cancelled because another table in the same transaction failed.",
+        "location": {"SourceObject": {"Table": "dim_date", "Partition": "dim_date"}}
+      }
+    ],
+    "objects": [
+      {"table": "fact_sales", "partition": "fact_sales", "status": "Failed"},
+      {"table": "dim_date", "partition": "dim_date", "status": "Failed"}
+    ]
+  },
+  "classification": {
+    "root_cause_table": "fact_sales",
+    "root_cause_partition": "fact_sales",
+    "root_cause_column": null,
+    "error_code": "0xC1450012",
+    "error_category": "MashupDataAccessError",
+    "underlying": {
+      "pattern": "EmptyColumnReference",
+      "snippet": "Expression.Error: The column '' of the table wasn't found."
+    },
+    "failed_user_tables": ["dim_date", "fact_sales"],
+    "next_actions": [
+      "Open PBIP and inspect M expression of table 'fact_sales'. Call pbi_locate_pbip with this table name; then grep for empty column refs: Table[\"\"], Field=\"\", PromoteHeaders missing source columns."
+    ]
+  },
+  "impacted_reports": [
+    {"id": "44444444-4444-4444-4444-444444444444", "name": "Demo Sales Overview"}
+  ],
+  "pbip_locate": {
+    "status": "found",
+    "matches": [
+      {
+        "match_type": "exact",
+        "tables_dir": "/demo/pbip/Demo Sales/Demo Sales.SemanticModel/definition/tables"
+      }
+    ]
+  },
+  "root_cause_source": {
+    "table_name": "fact_sales",
+    "file": "/demo/pbip/Demo Sales/Demo Sales.SemanticModel/definition/tables/fact_sales.tmdl"
+  }
+}
+```
+
+The agent can now follow an inspectable chain:
+
+1. The first `Error` message with `location.SourceObject.Table` identifies `fact_sales` and its partition as the initial investigation candidate.
+2. `0xC1450012` maps to `MashupDataAccessError`, and the message matches the catalog's `EmptyColumnReference` pattern. The later `dim_date` cancellation may be a cascade; a failed-table list alone does not prove two independent faults.
+3. The PBIP lookup finds a matching folder and table file. Its fictional M partition is shown separately below. When extraction succeeds, `root_cause_source.partition_source_m` contains the extracted TMDL partition body, including `source =`.
+
+**Fictional local TMDL source:**
+
+```text
+table fact_sales
+
+    partition fact_sales = m
+        mode: import
+        source =
+            let
+                Source = #table({"OrderId", "SalesAmount"}, {{1, 100}}),
+                SelectedColumns = Table.SelectColumns(Source, {""})
+            in
+                SelectedColumns
+
+    annotation PBI_ResultType = Table
+```
+
+Here, `Table.SelectColumns` asks for an empty column name, while the fictional source defines only `OrderId` and `SalesAmount`. This corroborates the error pattern and gives the operator a specific expression to inspect. The tool does not choose the intended replacement column.
+
+**Illustrative agent conclusion, not tool output or a verified repair:**
+
+> Start with the `fact_sales` M expression: it selects an empty column name. Confirm the intended column and upstream schema before editing; if the intent is to select `SalesAmount`, replace `{""}` with `{"SalesAmount"}` only after that check. Validate the change in Power Query/Power BI Desktop, confirm the local PBIP version matches the deployed model, then publish and retry through your normal approval process. Review the next refresh result to verify recovery. `dim_date` may have failed as a consequence of the same transaction. The bound "Demo Sales Overview" report in this workspace may still show stale data. This diagnosis has not changed settings or started a refresh.
+
+### 4. Know the limits
+
+| Area | Implemented behavior and required human judgment |
+|---|---|
+| Refresh selection | Automatic selection covers failed `ViaEnhancedApi` entries in the latest 10 records, not every refresh type or all history. Use `pbi_refresh_manage` with `action="status"` to inspect history and pass an explicit `refresh_id` for the intended incident. An explicit ID does not guarantee rich execution details. |
+| Missing evidence | No eligible refresh produces `classification: null` and no `target_refresh`. A failed details request is exposed as `refresh_details_error`, also with no classification. Authentication, history, or network failures can abort the call; missing evidence is not a healthy-state verdict. |
+| Error classification | `root_cause_table` is a heuristic: the first eligible error in message order, not a proven causal root. Pattern matching searches all messages and is not necessarily tied to that table. Unknown codes, missing messages, and cascading failures require manual investigation. |
+| Local source | Requires an existing, readable `pbip_root`, a matching dataset folder, a `.SemanticModel/definition/tables` directory, and a matching table file. Diagnosis uses the first dataset match; fuzzy matches can be wrong. Source hints may be absent, and M extraction may be `null`. Verify the file and deployed version. |
+| Report impact | `impacted_reports` lists reports in the **same workspace** whose `datasetId` matches. It is not a complete cross-workspace dependency or tenant-wide impact analysis. |
+| Remediation | This workflow reads evidence and suggests actions. It does not edit M, reset credentials, publish a model, or prove recovery. Refresh/cancel tools are separate capabilities; an operator must decide whether and when to use them. |
+
+Implementation references: [diagnostic tool](tools/diagnose.py), [classification and PBIP lookup](diagnostics.py), [error catalog](error_catalog.py), [dataset/report context](tools/dataset.py), and [refresh history/details](tools/refresh.py).
 
 ## Architecture
 
